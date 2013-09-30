@@ -43,7 +43,7 @@ DROP FUNCTION sequoia_init();
 --- File: ./AdjacencyList//init.sql ----
 
 
-CREATE OR REPLACE FUNCTION sequoia_init() RETURNS void AS 
+CREATE OR REPLACE FUNCTION sequoia_alist_init() RETURNS void AS 
 $BODY$
 DECLARE nodes INT; 
 	schemaExists INT;
@@ -64,10 +64,24 @@ CREATE TABLE sequoia_alist.Node (
 END;
 $BODY$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION sequoia_alist_teardown() RETURNS void AS 
+$BODY$
+DECLARE schemaExists INT;
+BEGIN  
+	
+-- Safely delete the sequoia_alist schema
+SELECT COUNT(schema_name) INTO schemaExists FROM information_schema.schemata WHERE schema_name = 'sequoia_alist';
+IF schemaExists > 0 THEN
+	DROP SCHEMA sequoia_alist CASCADE;
+END IF;	
+END;
+$BODY$ LANGUAGE plpgsql;
 
 -- initialize sequoia adjacency list 
-SELECT sequoia_init();
-DROP FUNCTION sequoia_init();
+SELECT sequoia_alist_init();
+DROP FUNCTION sequoia_alist_init();
+
+
 
 
 --- File: /functions.sql ----
@@ -266,13 +280,14 @@ DECLARE node INT;
 BEGIN
 	
 	IF (nodeId IS NULL) THEN
-		RAISE EXCEPTION 'nodeId must not be null.';
+	    RAISE EXCEPTION 'nodeId must not be null.';
 	END IF;
 	
 	SELECT * 
 	INTO node
 	FROM sequoia_alist.Node
-	WHERE parentId = nodeId
+	WHERE (parentId = nodeId) AND
+              (parentId <> childId)
 	LIMIT 1;
 	
 	RETURN NOT FOUND;
@@ -648,7 +663,7 @@ LANGUAGE plpgsql VOLATILE;
     
         - a. nodeId must not be null.
         - b. nodeId must be in the hierarchy.
-        
+        - c. This implementation guarantees that the nodes will appear in increasing order of depths.
     See also:
     
 */
@@ -656,62 +671,43 @@ CREATE OR REPLACE FUNCTION sequoia_alist.subtreeNodes(nodeId INT)
 RETURNS SETOF INT AS
 $BODY$
 DECLARE
-    age INT;
     updated BOOLEAN;
     rec RECORD;
-    arr1 INT[];
-    arr2 INT[];
+    arr INT[];
     i INT;
+    newItems INT := 0;
 BEGIN
-    CREATE TEMP TABLE queue(id INT, nodeAge INT);    
-    age := 0;
-
+    CREATE TEMP TABLE queue(id INT);    
+    INSERT INTO queue(id) VALUES (nodeId);
+    
     LOOP
-        updated := false;
-        
-        -- add children of newly added parents to the queue (sadly cant be done with INSERT INTO... yet)
+    
+        newItems:=0;            
+    
+        -- add children of newly added parents to the queue (sadly cant be done with INSERT INTO... yet)    
         FOR rec IN (SELECT DISTINCT N.childId AS childId
                     FROM sequoia_alist.Node N
-                    WHERE N.parentId IN (SELECT id
-                                        FROM queue Q
-                                        WHERE Q.nodeAge = age))
+                    INNER JOIN queue Q on Q.id = N.parentId 
+                    WHERE N.childId NOT IN (SELECT id FROM queue))
         LOOP
-                    
-            IF (age%2=1) THEN
-                SELECT array_append(arr1, rec.childId);
-            END IF;
-            
-            IF (age%2=0) THEN
-                SELECT array_append(arr2, rec.childId);
-            END IF;
-            
-            updated := true;            
+            newItems:=newItems+1;
+            arr:=rec.childId||arr;
+            RETURN NEXT rec.childId;    
         END LOOP;
         
-        -- return new results
-        IF (age%2=1 AND array_upper(arr1, 1) IS NOT NULL) THEN
-            FOR i IN 1 .. array_upper(arr1, 1)
-            LOOP
-                RETURN NEXT i;    
-            END LOOP;
-        END IF;
+        -- delete everything from queue 
+        DELETE FROM queue;
         
-        IF (age%2=0 AND array_upper(arr2, 1) IS NOT NULL) THEN
-            FOR i IN 1 .. array_upper(arr2, 1)
+        -- return new results        
+        IF (newItems > 0) THEN
+            FOR i IN 1 .. newItems
             LOOP
-                RETURN NEXT i;    
+                INSERT INTO queue(id) VALUES (arr[i]);                
             END LOOP;
-        END IF;
-        -- if no node was added in this round, we're done.
-        IF(NOT updated) THEN
+        ELSE 
             DROP TABLE queue;
-            RETURN;
+            RETURN;        
         END IF;
-        
-        --otherwise proceed to the next iteration
-        age:=age+1;
-        arr1 = array[];
-        arr2 = array[];
         
     END LOOP;
 END;
@@ -721,7 +717,7 @@ LANGUAGE plpgsql VOLATILE;
 /*
     Function: removeSubtree
     
-    Removes a node from the hierarchy with whole subtree under it.
+    Removes a subtree of a node from the hierarchy. Root node is not removed.
     
     Parameters:
     
@@ -740,9 +736,20 @@ CREATE OR REPLACE FUNCTION sequoia_alist.removeSubtree(nodeId INT)
 RETURNS VOID AS
 $BODY$
 BEGIN
+
+    IF (nodeId IS NULL) THEN
+        RAISE EXCEPTION 'nodeId must not be null.';
+    END IF;
+
+    IF (NOT sequoia_alist.contains(nodeId)) THEN
+        RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
+    END IF;
+
+    -- remove the nodes from the subtree
     DELETE
     FROM sequoia_alist.Node N
-    WHERE N.childId IN (SELECT sequoia_alist.subtreeNodes(nodeId));
+    WHERE N.childId IN (SELECT sequoia_alist.subtreeNodes(nodeId)) OR
+          N.parentId IN (SELECT sequoia_alist.subtreeNodes(nodeId));
     
 END;
 $BODY$ 

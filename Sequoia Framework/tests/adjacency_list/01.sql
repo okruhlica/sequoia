@@ -19,7 +19,7 @@
 
 	
 	INSERT INTO logg(name,res) VALUES ('isEmpty01',(SELECT sequoia_alist.isEmpty()));
-	INSERT INTO logg(name,res) VALUES ('getRoot01',((SELECT sequoia_alist.getroot()) IS NULL));
+	INSERT INTO logg(name,res) VALUES ('getRoot01',((SELECT sequoia_alist.getRoot()) IS NULL));
 	SELECT sequoia_alist.addnode(1,-1); -- set 1 as root
 	SELECT sequoia_alist.addNode(2,1);
 	SELECT sequoia_alist.addNode(3,2);
@@ -125,5 +125,19 @@
         INSERT INTO logg(name,res) VALUES ('removeLeafNode05',((SELECT sequoia_alist.isLeaf(3))));
         
         -- subtreeNodes function
-        INSERT INTO logg(name,res) VALUES ('subtreeNodes01',((SELECT COUNT(*) FROM (SELECT sequoia_alist.subtreeNodes(1)) AS X) = 4));
-SELECT * FROM logg;
+        INSERT INTO logg(name,res) VALUES ('subtreeNodes01',((SELECT COUNT(*) FROM (SELECT sequoia_alist.subtreeNodes(1)) AS X) = 3));
+	INSERT INTO logg(name,res) VALUES ('subtreeNodes02',((SELECT COUNT(*) FROM (SELECT sequoia_alist.subtreeNodes(2)) AS X) = 1));
+	INSERT INTO logg(name,res) VALUES ('subtreeNodes02',((SELECT COUNT(*) FROM (SELECT sequoia_alist.subtreeNodes(3)) AS X) = 0));
+
+	-- removeSubtree function
+	SELECT sequoia_alist.removeSubtree(2);
+	INSERT INTO logg(name,res) VALUES ('removeLeafNode01', ((SELECT sequoia_alist.isleaf(2))));
+	
+	SELECT sequoia_alist.removeSubtree(1);
+	INSERT INTO logg(name,res) VALUES ('removeLeafNode02', ((SELECT sequoia_alist.isleaf(1))));
+
+-- show the failed tests
+SELECT *
+FROM(
+SELECT * FROM logg) L
+WHERE NOT L.res;

@@ -1,68 +1,12 @@
 /*
-    Function: isEmpty
-    
-    Returns true iff there is no node is in the hierarchy.
-    
-    Parameters:
-    
-    See also:
-        <nodeCount>
-*/ 
-CREATE OR REPLACE FUNCTION sequoia_alist.isEmpty() RETURNS boolean AS 
-$BODY$
-DECLARE nodes INT;
-BEGIN  
-	SELECT COUNT(DISTINCT entityId)
-	INTO nodes
-	FROM sequoia_alist.Node;
-	
-	RETURN (nodes = 0);
-END;
-$BODY$ LANGUAGE plpgsql VOLATILE;
-
-/*
-    Function: contains
-    
-    Returns true iff the specified node is in a hierarchy.
-
-    Parameters:
-    
-        nodeId - id of the sequoia.entity to search for in the hierarchy
-    
-    Contract:
-        - nodeId must not be null.
-        
-    See also:
-        <isEmpty>
-*/
-CREATE OR REPLACE FUNCTION sequoia_alist.contains(nodeId INT) RETURNS boolean AS 
-$BODY$
-DECLARE node INT;
-BEGIN
-	
-	IF (nodeId IS NULL) THEN
-		RAISE EXCEPTION 'nodeId must not be null.';
-	END IF;
-	
-	SELECT * INTO node
-	FROM sequoia_alist.Node
-	WHERE (parentId = nodeId) OR
-		  (childId = nodeId)
-	LIMIT 1;
-	
-	RETURN FOUND;
-END;
-$BODY$ LANGUAGE plpgsql VOLATILE;
-
-/*
     Function: addNode
     
     Adds a an entity to the hierarchy as a new node.
 
     Parameters:
     
-        - @nodeId id of the entity to add
-        - @underNodeId id of the entity to add the node below. If -1, nodeId is attempted to be made a root.
+        - nodeId id of the entity to add
+        - underNodeId id of the entity to add the node below. If -1, nodeId is attempted to be made a root.
     
     Contract:
     
@@ -110,6 +54,63 @@ END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
 
+/*
+    Function: contains
+    
+    Returns true iff the specified node is in a hierarchy.
+
+    Parameters:
+    
+        nodeId - id of the sequoia.entity to search for in the hierarchy
+    
+    Contract:
+        - nodeId must not be null.
+        
+    See also:
+        <isEmpty>
+*/
+CREATE OR REPLACE FUNCTION sequoia_alist.contains(nodeId INT) RETURNS boolean AS 
+$BODY$
+DECLARE node INT;
+BEGIN
+	
+	IF (nodeId IS NULL) THEN
+		RAISE EXCEPTION 'nodeId must not be null.';
+	END IF;
+	
+	SELECT * INTO node
+	FROM sequoia_alist.Node
+	WHERE (parentId = nodeId) OR
+		  (childId = nodeId)
+	LIMIT 1;
+	
+	RETURN FOUND;
+END;
+$BODY$ LANGUAGE plpgsql VOLATILE;
+
+
+/*
+    Function: isEmpty
+    
+    Returns true iff there is no node is in the hierarchy.
+    
+    Parameters:
+    
+    See also:
+        <nodeCount>
+*/ 
+CREATE OR REPLACE FUNCTION sequoia_alist.isEmpty() RETURNS boolean AS 
+$BODY$
+DECLARE nodes INT;
+BEGIN  
+	SELECT COUNT(DISTINCT entityId)
+	INTO nodes
+	FROM sequoia_alist.Node;
+	
+	RETURN (nodes = 0);
+END;
+$BODY$ LANGUAGE plpgsql VOLATILE;
+
 
 /*
     Function: isRoot
@@ -118,7 +119,7 @@ LANGUAGE plpgsql VOLATILE;
 
     Parameters:
     
-        - @nodeId id of the sequoia.entity to check
+        - nodeId id of the sequoia.entity to check
     
     Contract:
     
@@ -155,7 +156,7 @@ LANGUAGE plpgsql VOLATILE;
 
     Parameters:
     
-        - @nodeId id of the sequoia.entity to check
+        - nodeId id of the sequoia.entity to check
     
     Contract:
     
@@ -170,13 +171,14 @@ DECLARE node INT;
 BEGIN
 	
 	IF (nodeId IS NULL) THEN
-		RAISE EXCEPTION 'nodeId must not be null.';
+	    RAISE EXCEPTION 'nodeId must not be null.';
 	END IF;
 	
 	SELECT * 
 	INTO node
 	FROM sequoia_alist.Node
-	WHERE parentId = nodeId
+	WHERE (parentId = nodeId) AND
+              (parentId <> childId)
 	LIMIT 1;
 	
 	RETURN NOT FOUND;
@@ -191,7 +193,7 @@ LANGUAGE plpgsql VOLATILE;
 
     Parameters:
     
-        - @nodeId id of the sequoia.entity to calculate depth for
+        - nodeId id of the sequoia.entity to calculate depth for
     
     Contract:
     
@@ -208,6 +210,29 @@ DECLARE currentNodeId INT;
 BEGIN
 	
 	RETURN (SELECT COUNT(*) FROM sequoia_alist.pathToRoot(nodeId)) - 1 ;
+END;
+$BODY$ 
+LANGUAGE plpgsql VOLATILE;
+
+/*
+    Function: getRoot
+    
+    Returns the root of the hierarchy. If the hierarchy is empty null is returned.
+
+    Parameters:
+    
+    Contract:
+    
+    See also:
+*/
+CREATE OR REPLACE FUNCTION sequoia_alist.getRoot()
+RETURNS INT AS
+$BODY$
+BEGIN
+    RETURN (SELECT parentId
+            FROM sequoia_alist.Node
+            WHERE parentId = childId
+            LIMIT 1);
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -269,29 +294,6 @@ $BODY$
 LANGUAGE plpgsql VOLATILE;
 
 /*
-    Function: getRoot
-    
-    Returns the root of the hierarchy. If the hierarchy is empty null is returned.
-
-    Parameters:
-    
-    Contract:
-    
-    See also:
-*/
-CREATE OR REPLACE FUNCTION sequoia_alist.getRoot()
-RETURNS INT AS
-$BODY$
-BEGIN
-    RETURN (SELECT parentId
-            FROM sequoia_alist.Node
-            WHERE parentId = childId
-            LIMIT 1);
-END;
-$BODY$ 
-LANGUAGE plpgsql VOLATILE;
-
-/*
     Function: getParent
     
     Returns the parent node element's id. If the nodeId refers to the root of the hierarchy, NULL is returned.
@@ -328,7 +330,7 @@ $BODY$
 LANGUAGE plpgsql VOLATILE;
 
 /*
-    Function: getParent
+    Function: getChildren
     
     Returns a setof element ids that are the direct children of the given node.
     
@@ -539,93 +541,11 @@ END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
 
-/*
-    Function: subtreeNodes
-    
-    Gets a setof nodes from the subtree of the node refered to by nodeId (nodeId is not included in the result).
-    
-    Parameters:
-    
-        - nodeId id of the sequoia.entity node to remove
-        
-    Contract:
-    
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
-        
-    See also:
-    
-*/
-CREATE OR REPLACE FUNCTION sequoia_alist.subtreeNodes(nodeId INT)
-RETURNS SETOF INT AS
-$BODY$
-DECLARE
-    age INT;
-    updated BOOLEAN;
-    rec RECORD;
-    arr1 INT[];
-    arr2 INT[];
-    i INT;
-BEGIN
-    CREATE TEMP TABLE queue(id INT, nodeAge INT);    
-    age := 0;
-
-    LOOP
-        updated := false;
-        
-        -- add children of newly added parents to the queue (sadly cant be done with INSERT INTO... yet)
-        FOR rec IN (SELECT DISTINCT N.childId AS childId
-                    FROM sequoia_alist.Node N
-                    WHERE N.parentId IN (SELECT id
-                                        FROM queue Q
-                                        WHERE Q.nodeAge = age))
-        LOOP
-                    
-            IF (age%2=1) THEN
-                SELECT array_append(arr1, rec.childId);
-            END IF;
-            
-            IF (age%2=0) THEN
-                SELECT array_append(arr2, rec.childId);
-            END IF;
-            
-            updated := true;            
-        END LOOP;
-        
-        -- return new results
-        IF (age%2=1 AND array_upper(arr1, 1) IS NOT NULL) THEN
-            FOR i IN 1 .. array_upper(arr1, 1)
-            LOOP
-                RETURN NEXT i;    
-            END LOOP;
-        END IF;
-        
-        IF (age%2=0 AND array_upper(arr2, 1) IS NOT NULL) THEN
-            FOR i IN 1 .. array_upper(arr2, 1)
-            LOOP
-                RETURN NEXT i;    
-            END LOOP;
-        END IF;
-        -- if no node was added in this round, we're done.
-        IF(NOT updated) THEN
-            DROP TABLE queue;
-            RETURN;
-        END IF;
-        
-        --otherwise proceed to the next iteration
-        age:=age+1;
-        arr1 = array[];
-        arr2 = array[];
-        
-    END LOOP;
-END;
-$BODY$ 
-LANGUAGE plpgsql VOLATILE;
 
 /*
     Function: removeSubtree
     
-    Removes a node from the hierarchy with whole subtree under it.
+    Removes a subtree of a node from the hierarchy. Root node is not removed.
     
     Parameters:
     
@@ -644,10 +564,85 @@ CREATE OR REPLACE FUNCTION sequoia_alist.removeSubtree(nodeId INT)
 RETURNS VOID AS
 $BODY$
 BEGIN
+
+    IF (nodeId IS NULL) THEN
+        RAISE EXCEPTION 'nodeId must not be null.';
+    END IF;
+
+    IF (NOT sequoia_alist.contains(nodeId)) THEN
+        RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
+    END IF;
+
+    -- remove the nodes from the subtree
     DELETE
     FROM sequoia_alist.Node N
-    WHERE N.childId IN (SELECT sequoia_alist.subtreeNodes(nodeId));
+    WHERE N.childId IN (SELECT sequoia_alist.subtreeNodes(nodeId)) OR
+          N.parentId IN (SELECT sequoia_alist.subtreeNodes(nodeId));
     
+END;
+$BODY$ 
+LANGUAGE plpgsql VOLATILE;
+
+/*
+    Function: subtreeNodes
+    
+    Gets a setof nodes from the subtree of the node refered to by nodeId (nodeId is not included in the result).
+    
+    Parameters:
+    
+        - nodeId id of the sequoia.entity node to remove
+        
+    Contract:
+    
+        - a. nodeId must not be null.
+        - b. nodeId must be in the hierarchy.
+        - c. This implementation guarantees that the nodes will appear in increasing order of depths.
+    See also:
+    
+*/
+CREATE OR REPLACE FUNCTION sequoia_alist.subtreeNodes(nodeId INT)
+RETURNS SETOF INT AS
+$BODY$
+DECLARE
+    updated BOOLEAN;
+    rec RECORD;
+    arr INT[];
+    i INT;
+    newItems INT := 0;
+BEGIN
+    CREATE TEMP TABLE queue(id INT);    
+    INSERT INTO queue(id) VALUES (nodeId);
+    
+    LOOP
+    
+        newItems:=0;            
+    
+        -- add children of newly added parents to the queue (sadly cant be done with INSERT INTO... yet)    
+        FOR rec IN (SELECT DISTINCT N.childId AS childId
+                    FROM sequoia_alist.Node N
+                    INNER JOIN queue Q on Q.id = N.parentId 
+                    WHERE N.childId NOT IN (SELECT id FROM queue))
+        LOOP
+            newItems:=newItems+1;
+            arr:=rec.childId||arr;
+            RETURN NEXT rec.childId;    
+        END LOOP;
+        
+        -- delete everything from queue 
+        DELETE FROM queue;
+        
+        -- return new results        
+        IF (newItems > 0) THEN
+            FOR i IN 1 .. newItems
+            LOOP
+                INSERT INTO queue(id) VALUES (arr[i]);                
+            END LOOP;
+        ELSE 
+            DROP TABLE queue;
+            RETURN;        
+        END IF;
+        
+    END LOOP;
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
