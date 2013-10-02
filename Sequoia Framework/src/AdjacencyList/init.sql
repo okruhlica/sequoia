@@ -5,18 +5,20 @@ DECLARE nodes INT;
 	schemaExists INT;
 BEGIN  
 	
--- Safely create the sequoia_alist schema
-SELECT COUNT(schema_name) INTO schemaExists FROM information_schema.schemata WHERE schema_name = 'sequoia_alist';
-IF schemaExists > 0 THEN
-	DROP SCHEMA sequoia_alist CASCADE;
-END IF;	
-CREATE SCHEMA sequoia_alist;
-	
-CREATE TABLE sequoia_alist.Node (
-	childId INT NOT NULL,--references sequoia.Entity(entityId),
-	parentId INT NOT NULL-- references sequoia.Entity(entityId)	
-) INHERITS (sequoia.Entity);
+    -- Safely create the sequoia_alist schema
+    SELECT COUNT(schema_name) INTO schemaExists FROM information_schema.schemata WHERE schema_name = 'sequoia_alist';
+    IF schemaExists > 0 THEN
+            DROP SCHEMA sequoia_alist CASCADE;
+    END IF;	
+    CREATE SCHEMA sequoia_alist;
+            
+    CREATE TABLE sequoia_alist.Node (
+            childId INT NOT NULL, --references sequoia.Entity(entityId) ON DELETE RESTRICT,
+            parentId INT NOT NULL --references sequoia.Entity(entityId) ON DELETE RESTRICT	
+    ) INHERITS (sequoia.Entity);
 
+    CREATE INDEX alist_node_childIdx ON sequoia_alist.Node (childId);
+    CREATE INDEX alist_node_parentIdx ON sequoia_alist.Node (parentId);
 END;
 $BODY$ LANGUAGE plpgsql;
 
