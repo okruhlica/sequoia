@@ -1,59 +1,122 @@
+
 /*
     Function: addNode
     
-    Adds a an entity to the hierarchy as a new node.
+    Adds an entity to the hierarchy as a new node.
 
     Parameters:
     
         - nodeId id of the entity to add
-        - underNodeId id of the entity to add the node below. If -1, nodeId is attempted to be made a root.
-    
-    Contract:
-    
-        - a. nodeId must not be null
-        - b. If nodeId is the same as underNodeId an exception is raised.
-        - c. If underNodeId does not exist in the hierarchy, an exception is raised.
-        - d. Node that already is in the hierarchy must be removed before it can be added again.
-        - e. Adding a node as a root succeeds iff there are no other nodes in the hierarchy.
+        - underNodeId id of the entity to hang the new node below. If NULL (or -1), nodeId will become the root.
         
+    Throws:
+    
+        - NULL_ARG - thrown if nodeId is negative or NULL.
+        - BAD_NODE_POSITION - thrown if nodeId is the same node as underNodeId
+        - MISSING_PARENT - thrown if underNodeId does not exist in the hierarchy.
+        - DUPLICATE_ADD - thrown if nodeId already is in the hierarchy. 
+        - MULTIPLE_ROOTS - thrown when trying to add a root node while one already exists in the hierarchy.
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.addNode(nodeId INT, underNodeId INT) 
 RETURNS void AS 
 $BODY$
-BEGIN  
-	
-	-- Check for rule a.
-	IF (nodeId = -1 OR nodeId IS NULL) THEN
-		RAISE EXCEPTION 'NodeId must not be null.';
+DECLARE
+    funcErrHeader TEXT;
+BEGIN
+        -- normalize arguments
+        nodeId := COALESCE($1,-1);
+        underNodeId := COALESCE($2,-1);
+        
+        funcErrHeader:= 'Error while running addNode(' || nodeId || ',' || underNodeId || ')';
+        
+        -- <CONTRACT CHECKING>                    
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
 	END IF;
 	
-	-- Check for rule b.
-	IF (nodeId = underNodeId) THEN
-		RAISE EXCEPTION 'You can not hang a node under itself.';
+	IF nodeId = underNodeId THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE =  '[BAD_NODE_POSITION] in ' || funcErrHeader,
+                    HINT = 'You can not hang a node under itself. That just makes no sense, dude.';
 	END IF;
 
-	-- Check for rule c.
-	IF ((underNodeId > 0) AND (NOT sequoia_alist.contains(underNodeId))) THEN	
-		RAISE EXCEPTION 'The underNode node (id: %) is not in the hierarchy.', underNodeId;
+	IF underNodeId >= 0 AND
+            (NOT sequoia_alist.contains(underNodeId)) THEN	
+		RAISE EXCEPTION USING
+                    MESSAGE = '[MISSING_PARENT] in ' || funcErrHeader,
+                    HINT = 'The underNodeId node is not in the hierarchy. Add it first baby.';
 	END IF;
 	
-	-- Check for rule d.
-	IF (sequoia_alist.contains(nodeId)) THEN
-		RAISE EXCEPTION 'This node (id: %) already is in the hierarchy.', nodeId;
-	END IF;
-			
-	-- root node will point to itself via the parent link
+	IF sequoia_alist.contains(nodeId) THEN
+		RAISE EXCEPTION USING
+                    MESSAGE = '[DUPLICATE_ADD] in ' || funcErrHeader,
+                    HINT = 'This nodeId node already is in the hierarchy. Lets not overdo it. Once is enough.';
+	END IF;	
+        -- </CONTRACT CHECKING>
+        	
         IF underNodeId = -1 THEN
-            IF(SELECT sequoia_alist.isEmpty()) THEN
-                underNodeId := nodeId;
-            ELSE
-                RAISE EXCEPTION 'There already is a root. Consider using swapNodes function.';    
+                
+            IF NOT (SELECT sequoia_alist.isEmpty()) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '[MULTIPLE_ROOTS] in ' || funcErrHeader,
+                    HINT = 'There already is a root. Consider adding the node as a leaf and using swapNodes function.';
             END IF;
+            
+            -- root node will point to itself via the parent link
+            underNodeId := nodeId;            
         END IF;
         
         -- insert the node into the hierarchy
 	INSERT INTO sequoia_alist.Node(childId, parentId) 
 	VALUES (nodeId, underNodeId);
+END;
+$BODY$ 
+LANGUAGE plpgsql VOLATILE;
+
+/*
+    Function: nodeCount
+    
+    Returns the count of nodes in the subtree rooted at nodeId node. The root node is included.
+
+    Parameters:
+    
+        - nodeId the root node of the (sub)tree to count
+        
+    Throws:
+    
+        - NULL_ARG - thrown if nodeId is negative or NULL.
+        - MISSING_NODE - thrown if nodeId is not present in the hierarchy.
+*/
+CREATE OR REPLACE FUNCTION sequoia_alist.nodeCount(nodeId INT) 
+RETURNS INT AS 
+$BODY$
+DECLARE
+    funcErrHeader TEXT;
+BEGIN
+        -- normalize arguments
+        nodeId := COALESCE($1,-1);
+        
+        funcErrHeader:= 'Error while running nodeCount(' || nodeId || ')';
+        
+        -- <CONTRACT CHECKING>                    
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
+	END IF;
+	
+	IF (NOT sequoia_alist.contains(nodeId)) THEN	
+            RAISE EXCEPTION USING
+                MESSAGE = '[MISSING_NODE] in ' || funcErrHeader,
+                HINT = 'The root node is not in the hierarchy. Add it first and then we will talk.';
+	END IF;	
+        -- </CONTRACT CHECKING>
+        	
+        -- this probably cant be done any more efficently
+        SELECT CAST(COUNT(*) AS INT)
+        FROM sequoia_alist.subtreeNodes(nodeId);
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -65,24 +128,34 @@ LANGUAGE plpgsql VOLATILE;
 
     Parameters:
     
-        nodeId - id of the sequoia.entity to search for in the hierarchy
+        - nodeId id of the entity to search for in the hierarchy
     
-    Contract:
-        - nodeId must not be null.
+    Throws:
+        
+        - NULL_ARG - thrown if nodeId is negative or NULL.
         
     See also:
         <isEmpty>
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.contains(nodeId INT) RETURNS boolean AS 
 $BODY$
-DECLARE node INT;
+DECLARE
+    node INT;
+    funcErrHeader TEXT;
 BEGIN
-	
-	IF (nodeId IS NULL) THEN
-		RAISE EXCEPTION 'nodeId must not be null.';
-	END IF;
-	
-	SELECT * INTO node
+	nodeId := COALESCE($1,-1);
+        funcErrHeader:= 'Error while running contains(' || nodeId || ')';
+        
+        -- <CONTRACT CHECKING>        
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
+	END IF;        
+	-- </CONTRACT CHECKING>
+        
+	SELECT *
+        INTO node
 	FROM sequoia_alist.Node
 	WHERE (parentId = nodeId) OR
 		  (childId = nodeId)
@@ -105,13 +178,12 @@ $BODY$ LANGUAGE plpgsql VOLATILE;
 */ 
 CREATE OR REPLACE FUNCTION sequoia_alist.isEmpty() RETURNS boolean AS 
 $BODY$
-DECLARE nodes INT;
 BEGIN  
-	SELECT COUNT(DISTINCT entityId)
-	INTO nodes
-	FROM sequoia_alist.Node;
-	
-	RETURN (nodes = 0);
+	RETURN (
+            SELECT NOT EXISTS(
+                SELECT entityId	
+                FROM sequoia_alist.Node)
+            );	
 END;
 $BODY$ LANGUAGE plpgsql VOLATILE;
 

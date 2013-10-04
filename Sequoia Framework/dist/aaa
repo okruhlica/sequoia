@@ -68,7 +68,7 @@ END;
 $BODY$
 LANGUAGE plpgsql VOLATILE;
 
-CREATE OR REPLACE FUNCTION sequoia.testInt(testName TEXT, got INT, expected INT)
+CREATE OR REPLACE FUNCTION sequoia.testInt(testName TEXT, expected INT, got INT)
 RETURNS VOID AS
 $BODY$
 BEGIN
@@ -99,6 +99,7 @@ BEGIN
 END;
 $BODY$
 LANGUAGE plpgsql VOLATILE;
+
 
 
 --- File: ./AdjacencyList//init.sql ----
@@ -265,7 +266,7 @@ $$ LANGUAGE plpgsql;
 /*
     Function: addNode
     
-    Adds an entity to the hierarchy as a new node.
+    Adds a an entity to the hierarchy as a new node.
 
     Parameters:
     
@@ -285,14 +286,16 @@ RETURNS void AS
 $BODY$
 DECLARE
     funcErrHeader TEXT;
+
 BEGIN
         -- normalize arguments
         nodeId := COALESCE($1,-1);
         underNodeId := COALESCE($2,-1);
         
-        funcErrHeader:= 'Error while running addNode(' || nodeId || ',' || underNodeId || ')';
         
-        -- <CONTRACT CHECKING>                    
+        -- <CONTRACT CHECKING>        
+        funcErrHeader:= 'Error while running addNode(' || nodeId || ',' || underNodeId || ')';
+            
 	IF nodeId < 0 THEN
 		RAISE EXCEPTION USING                    
                     MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
@@ -339,85 +342,30 @@ $BODY$
 LANGUAGE plpgsql VOLATILE;
 
 /*
-    Function: nodeCount
-    
-    Returns the count of nodes in the subtree rooted at nodeId node. The root node is included.
-
-    Parameters:
-    
-        - nodeId the root node of the (sub)tree to count
-        
-    Throws:
-    
-        - NULL_ARG - thrown if nodeId is negative or NULL.
-        - MISSING_NODE - thrown if nodeId is not present in the hierarchy.
-*/
-CREATE OR REPLACE FUNCTION sequoia_alist.nodeCount(nodeId INT) 
-RETURNS INT AS 
-$BODY$
-DECLARE
-    funcErrHeader TEXT;
-BEGIN
-        -- normalize arguments
-        nodeId := COALESCE($1,-1);
-        
-        funcErrHeader:= 'Error while running nodeCount(' || nodeId || ')';
-        
-        -- <CONTRACT CHECKING>                    
-	IF nodeId < 0 THEN
-		RAISE EXCEPTION USING                    
-                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
-                    HINT = 'nodeId must be a positive non-null integer.';
-	END IF;
-	
-	IF (NOT sequoia_alist.contains(nodeId)) THEN	
-            RAISE EXCEPTION USING
-                MESSAGE = '[MISSING_NODE] in ' || funcErrHeader,
-                HINT = 'The root node is not in the hierarchy. Add it first and then we will talk.';
-	END IF;	
-        -- </CONTRACT CHECKING>
-        	
-        SELECT CAST(COUNT(*) AS INT)
-        FROM sequoia_alist.subtreeNodes(nodeId);
-END;
-$BODY$ 
-LANGUAGE plpgsql VOLATILE;
-
-/*
     Function: contains
     
     Returns true iff the specified node is in a hierarchy.
 
     Parameters:
     
-        - nodeId id of the entity to search for in the hierarchy
+        nodeId - id of the sequoia.entity to search for in the hierarchy
     
-    Throws:
-        
-        - NULL_ARG - thrown if nodeId is negative or NULL.
+    Contract:
+        - nodeId must not be null.
         
     See also:
         <isEmpty>
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.contains(nodeId INT) RETURNS boolean AS 
 $BODY$
-DECLARE
-    node INT;
-    funcErrHeader TEXT;
+DECLARE node INT;
 BEGIN
-	nodeId := COALESCE($1,-1);
-        funcErrHeader:= 'Error while running contains(' || nodeId || ')';
-        
-        -- <CONTRACT CHECKING>        
-	IF nodeId < 0 THEN
-		RAISE EXCEPTION USING                    
-                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
-                    HINT = 'nodeId must be a positive non-null integer.';
-	END IF;        
-	-- </CONTRACT CHECKING>
-        
-	SELECT *
-        INTO node
+	
+	IF (nodeId IS NULL) THEN
+		RAISE EXCEPTION 'nodeId must not be null.';
+	END IF;
+	
+	SELECT * INTO node
 	FROM sequoia_alist.Node
 	WHERE (parentId = nodeId) OR
 		  (childId = nodeId)
