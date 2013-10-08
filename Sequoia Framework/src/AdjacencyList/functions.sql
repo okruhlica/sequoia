@@ -191,15 +191,15 @@ $BODY$ LANGUAGE plpgsql VOLATILE;
 /*
     Function: isRoot
     
-    Returns true iff the specified node is a root.
+    Returns true iff the specified node is the root of the hierarchy.
 
     Parameters:
     
         - nodeId id of the sequoia.entity to check
     
-    Contract:
+    Throws:
     
-        - a. nodeId must not be null.
+        - NULL_ARG - thrown if nodeId is negative or NULL.
     
     See also:
         <isLeaf>
@@ -207,20 +207,27 @@ $BODY$ LANGUAGE plpgsql VOLATILE;
 CREATE OR REPLACE FUNCTION sequoia_alist.isRoot(nodeId INT) RETURNS boolean AS 
 $BODY$
 DECLARE node INT;
+    funcErrHeader TEXT;
 BEGIN
+	nodeId := COALESCE($1,-1);
+        funcErrHeader:= 'Error while running isRoot(' || nodeId || ')';
+        
+        -- <CONTRACT CHECKING>        
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
+	END IF;        
+	-- </CONTRACT CHECKING>
 	
-	IF (nodeId IS NULL) THEN
-		RAISE EXCEPTION 'nodeId must not be null.';
-	END IF;
-	
-	SELECT * 
-	INTO node
-	FROM sequoia_alist.Node
-	WHERE (parentId = childId) AND
-		  (childId = nodeId)
-	LIMIT 1;
-	
-	RETURN FOUND;
+        RETURN (
+            SELECT EXISTS(
+                SELECT entityId	
+                FROM sequoia_alist.Node
+                WHERE childId = nodeId AND parentId = childId
+                LIMIT 1
+            )
+        );
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -234,9 +241,9 @@ LANGUAGE plpgsql VOLATILE;
     
         - nodeId id of the sequoia.entity to check
     
-    Contract:
+    Throws:
     
-        - a. nodeId must not be null.
+        - NULL_ARG - thrown if nodeId is negative or NULL.
     
     See also:
         <isRoot>
@@ -244,20 +251,27 @@ LANGUAGE plpgsql VOLATILE;
 CREATE OR REPLACE FUNCTION sequoia_alist.isLeaf(nodeId INT) RETURNS boolean AS 
 $BODY$
 DECLARE node INT;
+    funcErrHeader TEXT;
 BEGIN
-	
-	IF (nodeId IS NULL) THEN
-	    RAISE EXCEPTION 'nodeId must not be null.';
-	END IF;
-	
-	SELECT * 
-	INTO node
-	FROM sequoia_alist.Node
-	WHERE (parentId = nodeId) AND
-              (parentId <> childId)
-	LIMIT 1;
-	
-	RETURN NOT FOUND;
+	nodeId := COALESCE($1,-1);
+        funcErrHeader:= 'Error while running isLeaf(' || nodeId || ')';
+        
+        -- <CONTRACT CHECKING>        
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
+	END IF;        
+	-- </CONTRACT CHECKING>
+
+        RETURN (
+            SELECT NOT EXISTS(
+                SELECT entityId	
+                FROM sequoia_alist.Node
+                WHERE parentId = nodeId AND parentId <> childId
+                LIMIT 1
+            )
+        );        
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -271,10 +285,10 @@ LANGUAGE plpgsql VOLATILE;
     
         - nodeId id of the sequoia.entity to calculate depth for
     
-    Contract:
+    Thrown:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
     
     See also:
         <pathToRoot>
@@ -283,9 +297,29 @@ CREATE OR REPLACE FUNCTION sequoia_alist.depth(nodeId INT) RETURNS int AS
 $BODY$
 DECLARE currentNodeId INT;
         nodeDepth INT;
+        funcErrHeader TEXT;
 BEGIN
-	
-	RETURN (SELECT COUNT(*) FROM sequoia_alist.pathToRoot(nodeId)) - 1 ;
+	nodeId := COALESCE($1,-1);
+        funcErrHeader:= 'Error while running depth(' || nodeId || ')';
+        
+        -- <CONTRACT CHECKING>        
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
+	END IF;        
+
+	IF NOT sequoia_alist.contains(nodeId) THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+                    HINT = 'nodeId must already be in the hierarchy.';
+	END IF;        
+	-- </CONTRACT CHECKING>
+
+	RETURN (
+                SELECT COUNT(*)
+                FROM sequoia_alist.pathToRoot(nodeId)
+                ) - 1 ;
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -297,9 +331,9 @@ LANGUAGE plpgsql VOLATILE;
 
     Parameters:
     
-    Contract:
+    Thrown:
     
-    See also:
+    See also:    
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.getRoot()
 RETURNS INT AS
@@ -322,10 +356,10 @@ LANGUAGE plpgsql VOLATILE;
     
         - nodeId id of the sequoia.entity to calculate path for
     
-    Contract:
+    Thrown:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
     
     See also:
         <depth>
@@ -334,36 +368,45 @@ CREATE OR REPLACE FUNCTION sequoia_alist.pathToRoot(nodeId INT)
  RETURNS SETOF INT AS
  $BODY$
 DECLARE currentNodeId INT;
-        nodeDepth INT;
+        nodeDepth INT := 0;
+        funcErrHeader TEXT;
 BEGIN
-	IF (nodeId IS NULL) THEN
-		RAISE EXCEPTION 'nodeId must not be null.';
-	END IF;
-	
-        IF (NOT sequoia_alist.contains(nodeId)) THEN
-		RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
-	END IF;
-	
+	nodeId := COALESCE($1,-1);
+        funcErrHeader:= 'Error while running pathToRoot(' || nodeId || ')';
+        
+        -- <CONTRACT CHECKING>        
+	IF nodeId < 0 THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                    HINT = 'nodeId must be a positive non-null integer.';
+	END IF;        
+
+	IF NOT sequoia_alist.contains(nodeId) THEN
+		RAISE EXCEPTION USING                    
+                    MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+                    HINT = 'nodeId must already be in the hierarchy.';
+	END IF;        
+	-- </CONTRACT CHECKING>
+
         -- move up by parent links until we get into the root
-        
-        RETURN NEXT nodeId;        
+                
         currentNodeId := nodeId;
-        nodeDepth := 0;
-        LOOP
+        WHILE currentNodeId IS NOT NULL LOOP
         
-            -- move up the link
+            RETURN NEXT currentNodeId;
+            
+            -- move up via parent link
             SELECT NULLIF(parentId, currentNodeId)
             INTO currentNodeId
             FROM sequoia_alist.Node
             WHERE childId = currentNodeId
             LIMIT 1;
             
-            -- welcome in the root node
-            IF (currentNodeId IS NULL) THEN
+            -- welcome to the root node
+            IF currentNodeId IS NULL THEN
                 RETURN;
-            ELSE 
-                RETURN NEXT currentNodeId;
             END IF;
+
         END LOOP;
 END;
 $BODY$ 
@@ -380,27 +423,41 @@ LANGUAGE plpgsql VOLATILE;
         
     Contract:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
+        
     See also:
+        <getChildren>
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.getParent(nodeId INT)
 RETURNS INT AS
 $BODY$
+DECLARE funcErrHeader TEXT;
 BEGIN
 
-    IF (nodeId IS NULL) THEN
-            RAISE EXCEPTION 'nodeId must not be null.';
-    END IF;
+    nodeId := COALESCE($1,-1);
+    funcErrHeader:= 'Error while running getParent(' || nodeId || ')';
     
-    IF (NOT sequoia_alist.contains(nodeId)) THEN
-            RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
-    END IF;
+    -- <CONTRACT CHECKING>        
+    IF nodeId < 0 THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                HINT = 'nodeId must be a positive non-null integer.';
+    END IF;        
 
-    RETURN (SELECT NULLIF(parentId,childId)
+    IF NOT sequoia_alist.contains(nodeId) THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+                HINT = 'nodeId must already be in the hierarchy.';
+    END IF;        
+    -- </CONTRACT CHECKING>
+        
+    RETURN (
+            SELECT NULLIF(parentId,childId)
             FROM sequoia_alist.Node
             WHERE childId = nodeId
-            LIMIT 1);
+            LIMIT 1
+        );
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -416,27 +473,41 @@ LANGUAGE plpgsql VOLATILE;
         
     Contract:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
+        
     See also:
+        <getParent>
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.getChildren(nodeId INT)
 RETURNS SETOF INT AS
 $BODY$
+DECLARE funcErrHeader TEXT;
 BEGIN
 
-    IF (nodeId IS NULL) THEN
-            RAISE EXCEPTION 'nodeId must not be null.';
-    END IF;
+    nodeId := COALESCE($1,-1);
+    funcErrHeader:= 'Error while running getChildren(' || nodeId || ')';
     
-    IF (NOT sequoia_alist.contains(nodeId)) THEN
-            RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
-    END IF;
+    -- <CONTRACT CHECKING>        
+    IF nodeId < 0 THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                HINT = 'nodeId must be a positive non-null integer.';
+    END IF;        
 
-    RETURN QUERY (SELECT childId
+    IF NOT sequoia_alist.contains(nodeId) THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+                HINT = 'nodeId must already be in the hierarchy.';
+    END IF;        
+    -- </CONTRACT CHECKING>
+    
+    RETURN QUERY (
+            SELECT childId
             FROM sequoia_alist.Node
             WHERE parentId = nodeId AND
-                  parentId <> childId);
+                  childId <> nodeId
+            );
 END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
@@ -448,12 +519,12 @@ LANGUAGE plpgsql VOLATILE;
     
     Parameters:
     
-        - nodeId1 id of the second sequoia.entity
+        - nodeId1 id of the first sequoia.entity
         - nodeId2 id of the second sequoia.entity
     Contract:
     
-        - a. nodeId1/nodeId2 must not be null.
-        - b. nodeId1/nodeId2 must be in the hierarchy.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
         
     See also:
     
@@ -462,24 +533,29 @@ LANGUAGE plpgsql VOLATILE;
 CREATE OR REPLACE FUNCTION sequoia_alist.swapNodes(nodeId1 INT, nodeId2 INT)
 RETURNS VOID AS
 $BODY$
+DECLARE funcErrHeader TEXT;
 BEGIN
 
-    IF (nodeId1 IS NULL) THEN
-            RAISE EXCEPTION 'nodeId1 must not be null.';
-    END IF;
-
-    IF (nodeId2 IS NULL) THEN
-            RAISE EXCEPTION 'nodeId2 must not be null.';
-    END IF;
+    nodeId1 := COALESCE($1,-1);
+    nodeId2 := COALESCE($2,-1);
     
-    IF (NOT sequoia_alist.contains(nodeId1)) THEN
-            RAISE EXCEPTION 'nodeId1(id: %) is not in the hierarchy.', nodeId1;
-    END IF;
+    funcErrHeader:= 'Error while running swapNodes(' || nodeId1 || ',' || nodeId2 || ')';
+    
+     -- <CONTRACT CHECKING>        
+    IF nodeId1 < 0  OR nodeId2 < 0 THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                HINT = 'nodeIdX must be a positive non-null integers.';
+    END IF;        
 
-    IF (NOT sequoia_alist.contains(nodeId2)) THEN
-            RAISE EXCEPTION 'nodeId2(id: %) is not in the hierarchy.', nodeId2;
-    END IF;
-
+    IF NOT (sequoia_alist.contains(nodeId1) AND
+            sequoia_alist.contains(nodeId2)) THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+                HINT = 'nodeIdX must already be in the hierarchy.';
+    END IF;        
+    -- </CONTRACT CHECKING>
+       
     -- update all ids that are nodeId1 to -2 temporarily
     UPDATE sequoia_alist.Node
     SET childId = -2
@@ -520,13 +596,12 @@ LANGUAGE plpgsql VOLATILE;
     
         - sourceNodeId id of the second sequoia.entity
         - targetNodeId id of the second sequoia.entity
-    Contract:
+
+    Throws:
     
-        - a. sourceNodeId/targetNodeId must not be null.
-        - b. sourceNodeId/targetNodeId must be in the hierarchy.
-        - c. sourceNodeId must not be on the path to root from targetNodeId (to avoid cycles).
-        - d. if sourceNodeId = targetNodeId then no action is taken
-        
+        - NULL_ARG - thrown if sourceNodeId or targetNodeId are negative or null.
+        - NO_SUCH_NODE - thrown if either argument node is not in the hierarchy.
+        - BAD_NODE_POSITION - thrown if sourceNodeId is on the path to root from targetNodeId. This is to prevent creating cycles.
     See also:
     
         <swapNodes>
@@ -534,35 +609,45 @@ LANGUAGE plpgsql VOLATILE;
 CREATE OR REPLACE FUNCTION sequoia_alist.moveSubtree(sourceNodeId INT, targetNodeId INT)
 RETURNS VOID AS
 $BODY$
+DECLARE funcErrHeader TEXT;
 BEGIN
 
-    IF (sourceNodeId IS NULL) THEN
-        RAISE EXCEPTION 'nodeId1 must not be null.';
-    END IF;
-
-    IF (targetNodeId IS NULL) THEN
-        RAISE EXCEPTION 'nodeId2 must not be null.';
-    END IF;
+    sourceNodeId := COALESCE($1,-1);
+    targetNodeId := COALESCE($2,-1);
     
-    IF (NOT sequoia_alist.contains(sourceNodeId)) THEN
-        RAISE EXCEPTION 'nodeId1(id: %) is not in the hierarchy.', sourceNodeId;
-    END IF;
+    funcErrHeader:= 'Error while running swapNodes(' || sourceNodeId || ',' || targetNodeId || ')';
 
-    IF (NOT sequoia_alist.contains(targetNodeId)) THEN
-        RAISE EXCEPTION 'nodeId2(id: %) is not in the hierarchy.', targetNodeId;
-    END IF;
-
-    IF $1 = $2 THEN
+    -- trivial case
+    IF sourceNodeId = targetNodeId THEN
         RETURN;
-    END IF;
-    
-    -- check whether the operation would create a cycle
-    IF (EXISTS(SELECT pathtoroot
+    END IF;   
+        
+     -- <CONTRACT CHECKING>        
+    IF sourceNodeId < 0  OR sourceNodeId < 0 THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+                HINT = 'Both arguments must be positive non-null integers.';
+    END IF;        
+
+    IF NOT (sequoia_alist.contains(sourceNodeId) AND
+            sequoia_alist.contains(targetNodeId)) THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+                HINT = 'Both arguments must already be in the hierarchy.';
+    END IF;        
+
+    -- check whether the operation could create a cycle
+    IF (EXISTS(
+               SELECT pathtoroot
                FROM sequoia_alist.pathtoroot(targetNodeId)
                WHERE sourceNodeId = pathtoroot
-               LIMIT 1)) THEN
-        RAISE EXCEPTION 'Cannot move subtree under a node to its own subtree.';
+               LIMIT 1)
+               ) THEN
+            RAISE EXCEPTION USING                    
+                MESSAGE = '[BAD_NODE_POSITION] in ' || funcErrHeader,
+                HINT = 'Can not move a tree under its own subtree. This would violate the tree condition.';
     END IF;
+    -- </CONTRACT CHECKING>
     
     -- update all parent links to a new parent
     UPDATE sequoia_alist.Node
@@ -583,9 +668,9 @@ LANGUAGE plpgsql VOLATILE;
         
     Contract:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
-        - c. nodeId must be a leaf node.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
+        - BAD_NODE_POSITION - thrown if nodeId is not a leaf node.
         
     See also:
     
@@ -594,19 +679,31 @@ LANGUAGE plpgsql VOLATILE;
 CREATE OR REPLACE FUNCTION sequoia_alist.removeLeafNode(nodeId INT)
 RETURNS VOID AS
 $BODY$
+DECLARE funcErrHeader TEXT;
 BEGIN
 
-    IF (nodeId IS NULL) THEN
-        RAISE EXCEPTION 'nodeId must not be null.';
-    END IF;
+    nodeId := COALESCE($1,-1);
+    funcErrHeader:= 'Error while running removeLeafNode(' || nodeId || ')';
+    
+    -- <CONTRACT CHECKING>        
+    IF nodeId < 0 THEN
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+            HINT = 'nodeId must be a positive non-null integer.';
+    END IF;        
 
-    IF (NOT sequoia_alist.contains(nodeId)) THEN
-        RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
-    END IF;
-
+    IF NOT sequoia_alist.contains(nodeId) THEN
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+            HINT = 'nodeId must already be in the hierarchy.';
+    END IF;        
+    
     IF (NOT sequoia_alist.isLeaf(nodeId)) THEN
-        RAISE EXCEPTION 'nodeId(id: %) is not a leaf node.', nodeId;
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[BAD_NODE_POSITION] in ' || funcErrHeader,
+            HINT = 'The argument must be a leaf node.';
     END IF;
+    -- </CONTRACT CHECKING>
     
     -- remove all links to the leaf node
     DELETE
@@ -627,10 +724,10 @@ LANGUAGE plpgsql VOLATILE;
     
         - nodeId id of the sequoia.entity node to remove
         
-    Contract:
+    Throws:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
         
     See also:
     
@@ -639,16 +736,26 @@ LANGUAGE plpgsql VOLATILE;
 CREATE OR REPLACE FUNCTION sequoia_alist.removeSubtree(nodeId INT)
 RETURNS VOID AS
 $BODY$
+DECLARE funcErrHeader TEXT;
 BEGIN
 
-    IF (nodeId IS NULL) THEN
-        RAISE EXCEPTION 'nodeId must not be null.';
-    END IF;
+    nodeId := COALESCE($1,-1);
+    funcErrHeader:= 'Error while running removeSubtree(' || nodeId || ')';
+    
+    -- <CONTRACT CHECKING>        
+    IF nodeId < 0 THEN
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+            HINT = 'nodeId must be a positive non-null integer.';
+    END IF;        
 
-    IF (NOT sequoia_alist.contains(nodeId)) THEN
-        RAISE EXCEPTION 'nodeId(id: %) is not in the hierarchy.', nodeId;
-    END IF;
-
+    IF NOT sequoia_alist.contains(nodeId) THEN
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+            HINT = 'nodeId must already be in the hierarchy.';
+    END IF;        
+    -- </CONTRACT CHECKING>
+    
     -- remove the nodes from the subtree
     DELETE
     FROM sequoia_alist.Node N
@@ -663,18 +770,18 @@ LANGUAGE plpgsql VOLATILE;
     Function: subtreeNodes
     
     Gets a setof nodes from the subtree of the node refered to by nodeId (nodeId is not included in the result).
+    Nodes are guaranteed to appear in increasing order of depths measured from nodeId.
     
     Parameters:
     
-        - nodeId id of the sequoia.entity node to remove
+        - nodeId - id of the sequoia.entity node to remove
         
-    Contract:
+    Throws:
     
-        - a. nodeId must not be null.
-        - b. nodeId must be in the hierarchy.
-        - c. This implementation guarantees that the nodes will appear in increasing order of depths.
+        - NULL_ARG - thrown if nodeId is negative or null.
+        - NO_SUCH_NODE - thrown if nodeId is not in the hierarchy.
+        
     See also:
-    
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.subtreeNodes(nodeId INT)
 RETURNS SETOF INT AS
@@ -685,7 +792,26 @@ DECLARE
     arr INT[];
     i INT;
     newItems INT := 0;
+DECLARE funcErrHeader TEXT;
 BEGIN
+
+    nodeId := COALESCE($1,-1);
+    funcErrHeader:= 'Error while running subtreeNodes(' || nodeId || ')';
+    
+    -- <CONTRACT CHECKING>        
+    IF nodeId < 0 THEN
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[NULL_ARG] in ' || funcErrHeader,
+            HINT = 'nodeId must be a positive non-null integer.';
+    END IF;        
+
+    IF NOT sequoia_alist.contains(nodeId) THEN
+        RAISE EXCEPTION USING                    
+            MESSAGE = '[NO_SUCH_NODE] in ' || funcErrHeader,
+            HINT = 'nodeId must already be in the hierarchy.';
+    END IF;        
+    -- </CONTRACT CHECKING>
+    
     CREATE TEMP TABLE queue(id INT);    
     INSERT INTO queue(id) VALUES (nodeId);
     
@@ -727,16 +853,10 @@ LANGUAGE plpgsql VOLATILE;
 /*
     Function: clear
     
-    Removes all data about the current hierarchy.
+    Removes all data about the current hierarchy. After applying this function, the result of isEmpty() will always be true.
     
-    Parameters:
-    
-    Contract:
-    
-        - after applying this function, the result of isEmpty() will always be true.
-        
     See also:
-        removeNode
+        <removeSubtree>
 */
 CREATE OR REPLACE FUNCTION sequoia_alist.clear()
 RETURNS VOID AS
@@ -750,4 +870,3 @@ END;
 $BODY$ 
 LANGUAGE plpgsql VOLATILE;
 
--- version 0.1 / september 2013
